@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Watch</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+
+  #bg {
+    position: fixed; inset: 0;
+    background: radial-gradient(ellipse at 30% 40%, #fcd5e0 0%, #f0e8f5 25%, #b8d4f8 60%, #90bdf5 100%);
+    opacity: 0; transition: opacity 1.2s ease; z-index: 0;
+  }
+  #bg.visible { opacity: 1; }
+  #bg::before {
+    content: ''; position: absolute;
+    width: 500px; height: 500px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(255,182,206,0.45), transparent 70%);
+    top: -100px; left: -100px;
+    animation: drift 8s ease-in-out infinite alternate;
+  }
+  #bg::after {
+    content: ''; position: absolute;
+    width: 400px; height: 400px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(100,170,245,0.6), transparent 70%);
+    bottom: -80px; right: -80px;
+    animation: drift 10s ease-in-out infinite alternate-reverse;
+  }
+  @keyframes drift {
+    from { transform: translate(0,0) scale(1); }
+    to   { transform: translate(40px,30px) scale(1.08); }
+  }
+
+  #vid-wrap {
+    position: fixed; inset: 0; z-index: 1;
+    transition: transform 1s cubic-bezier(0.4,0,0.2,1), opacity 1s ease;
+    transform-origin: center center;
+  }
+  #vid-wrap.zoom-out { transform: scale(0.55); opacity: 0; }
+
+  video { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+  #overlay {
+    position: fixed; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; z-index: 10;
+    opacity: 1; transition: opacity 0.4s ease;
+    background: rgba(0,0,0,0.5);
+  }
+  #overlay.hidden { opacity: 0; pointer-events: none; }
+
+  .play-btn {
+    width: 80px; height: 80px; border-radius: 50%;
+    background: rgba(255,255,255,0.2);
+    border: 2px solid rgba(255,255,255,0.85);
+    display: flex; align-items: center; justify-content: center;
+    transition: transform 0.2s ease, background 0.2s ease;
+    backdrop-filter: blur(6px);
+    box-shadow: 0 8px 32px rgba(180,150,200,0.25);
+  }
+  #overlay:hover .play-btn { transform: scale(1.1); background: rgba(255,255,255,0.35); }
+  .play-btn svg { margin-left: 5px; }
+
+  #confetti-canvas { position: fixed; inset: 0; z-index: 5; pointer-events: none; }
+
+  /* ── Centre image ── */
+  #reveal-wrap {
+    position: fixed; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    z-index: 6;
+    pointer-events: none;
+    opacity: 0;
+  }
+  #reveal-wrap.show { opacity: 1; }
+
+  #reveal-img {
+    /* 55vw wide, never taller than 55vh — leaves a broad border all around */
+    width: 55vw;
+    max-height: 55vh;
+    object-fit: contain;
+    border-radius: 12px;
+    box-shadow: 0 24px 80px rgba(0,0,0,0.25);
+    /* pop-in starts hidden/small */
+    transform: scale(0);
+    animation: none;
+  }
+  #reveal-img.pop {
+    animation: popIn 0.5s cubic-bezier(0.34,1.56,0.64,1) forwards,
+               float 2.4s ease-in-out 0.5s infinite;
+  }
+
+  @keyframes popIn {
+    from { transform: scale(0); }
+    to   { transform: scale(1); }
+  }
+
+  /* gentle forward-backward float */
+  @keyframes float {
+    0%   { transform: scale(1);    }
+    25%  { transform: scale(1.06); }
+    50%  { transform: scale(1);    }
+    75%  { transform: scale(0.95); }
+    100% { transform: scale(1);    }
+  }
+</style>
+</head>
+<body>
+
+<div id="bg"></div>
+<canvas id="confetti-canvas"></canvas>
+
+<!-- 👇 Replace "your-image.jpg" with your actual image filename -->
+<div id="reveal-wrap">
+  <img id="reveal-img" src="finalblow.jpg" alt="">
+</div>
+
+<div id="vid-wrap">
+  <!-- 👇 Replace "your-video.mp4" with your actual video filename -->
+  <video id="vid" src="Bdv.mp4" muted playsinline></video>
+</div>
+
+<div id="overlay" onclick="play()">
+  <div class="play-btn">
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="white">
+      <polygon points="5,3 19,12 5,21"/>
+    </svg>
+  </div>
+</div>
+
+<script>
+  const vid        = document.getElementById('vid');
+  const overlay    = document.getElementById('overlay');
+  const vidWrap    = document.getElementById('vid-wrap');
+  const bg         = document.getElementById('bg');
+  const canvas     = document.getElementById('confetti-canvas');
+  const ctx        = canvas.getContext('2d');
+  const revealWrap = document.getElementById('reveal-wrap');
+  const revealImg  = document.getElementById('reveal-img');
+
+  function resize() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
+  resize();
+  window.addEventListener('resize', resize);
+
+  const COLORS = [
+    '#FF0000','#FF4500','#FF7F00','#FFB300','#FFD700',
+    '#ADFF2F','#00FF7F','#00FFFF','#00BFFF','#1E90FF',
+    '#8A2BE2','#FF00FF','#FF69B4','#FF1493','#7FFF00',
+    '#FF6347','#40E0D0','#EE82EE','#F0E68C','#98FB98'
+  ];
+
+  let pieces = [];
+  let animId = null;
+
+  function rand(a, b) { return a + Math.random() * (b - a); }
+
+  function spawnBurst(x, y, minA, maxA, count) {
+    for (let i = 0; i < count; i++) {
+      const angle = rand(minA, maxA);
+      const speed = rand(6, 20);
+      pieces.push({
+        x, y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        rot: rand(0, 360), rotSpeed: rand(-8, 8),
+        w: rand(7, 15), h: rand(4, 9),
+        color: COLORS[Math.floor(Math.random() * COLORS.length)],
+        shape: Math.random() > 0.35 ? 'rect' : 'circle',
+        gravity: rand(0.3, 0.6),
+      });
+    }
+  }
+
+  function burstCorners() {
+    const W = canvas.width, H = canvas.height, n = 90;
+    spawnBurst(0, 0,   -0.2,           Math.PI * 0.6,  n);
+    spawnBurst(W, 0,   Math.PI * 0.4,  Math.PI * 1.2,  n);
+    spawnBurst(0, H,   -Math.PI * 0.6, 0.2,            n);
+    spawnBurst(W, H,   Math.PI * 0.8,  Math.PI * 1.6,  n);
+  }
+
+  function burstRandom() {
+    const W = canvas.width, H = canvas.height;
+    [
+      { x: rand(W*0.2, W*0.4), y: rand(H*0.2, H*0.5) },
+      { x: rand(W*0.6, W*0.8), y: rand(H*0.2, H*0.5) },
+      { x: rand(W*0.3, W*0.7), y: rand(H*0.3, H*0.6) },
+    ].forEach(s => spawnBurst(s.x, s.y, 0, Math.PI * 2, 70));
+  }
+
+  /* ── Sound ── */
+  let ac = null;
+  function getAC() {
+    if (!ac) {
+      const A = window.AudioContext || window.webkitAudioContext;
+      if (A) ac = new A();
+    }
+    return ac;
+  }
+
+  function playPop(a, delay = 0) {
+    const bufSize = Math.floor(a.sampleRate * 0.08);
+    const buf = a.createBuffer(1, bufSize, a.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < bufSize; i++)
+      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bufSize, 3);
+    const src  = a.createBufferSource();
+    src.buffer = buf;
+    const bp = a.createBiquadFilter();
+    bp.type = 'bandpass'; bp.frequency.value = 800 + Math.random()*400; bp.Q.value = 0.8;
+    const gain = a.createGain();
+    gain.gain.setValueAtTime(1.8, a.currentTime + delay);
+    gain.gain.exponentialRampToValueAtTime(0.001, a.currentTime + delay + 0.1);
+    src.connect(bp); bp.connect(gain); gain.connect(a.destination);
+    src.start(a.currentTime + delay);
+    src.stop(a.currentTime + delay + 0.15);
+  }
+
+  function playChime(a, delay = 0) {
+    [523,659,784,1047,1319].forEach((freq, i) => {
+      const osc  = a.createOscillator();
+      const gain = a.createGain();
+      osc.type = 'sine'; osc.frequency.value = freq;
+      const t = a.currentTime + delay + i * 0.09;
+      gain.gain.setValueAtTime(0, t);
+      gain.gain.linearRampToValueAtTime(0.25, t + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
+      osc.connect(gain); gain.connect(a.destination);
+      osc.start(t); osc.stop(t + 0.45);
+    });
+  }
+
+  function fireSound(delay = 0) {
+    const a = getAC(); if (!a) return;
+    playPop(a, delay); playPop(a, delay + 0.04); playChime(a, delay + 0.05);
+  }
+
+  /* ── Animation loop ── */
+  function animateConfetti() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    pieces.forEach(p => {
+      p.x += p.vx; p.y += p.vy;
+      p.vy += p.gravity; p.vx *= 0.98; p.rot += p.rotSpeed;
+    });
+    pieces = pieces.filter(p => p.y < canvas.height + 30);
+    pieces.forEach(p => {
+      ctx.save();
+      ctx.globalAlpha = 1;
+      ctx.translate(p.x, p.y);
+      ctx.rotate((p.rot * Math.PI) / 180);
+      ctx.fillStyle = p.color;
+      if (p.shape === 'rect') ctx.fillRect(-p.w/2, -p.h/2, p.w, p.h);
+      else { ctx.beginPath(); ctx.arc(0,0,p.w/2,0,Math.PI*2); ctx.fill(); }
+      ctx.restore();
+    });
+    if (pieces.length > 0) animId = requestAnimationFrame(animateConfetti);
+    else ctx.clearRect(0, 0, canvas.width, canvas.height);
+  }
+
+  function startAnimation() {
+    if (animId) cancelAnimationFrame(animId);
+    animateConfetti();
+  }
+
+  /* ── First 4 waves of confetti ── */
+  function triggerCelebration() {
+    burstCorners(); fireSound(0); startAnimation();
+    setTimeout(() => { burstRandom();  fireSound(0); }, 600);
+    setTimeout(() => { burstCorners(); fireSound(0); }, 1200);
+    setTimeout(() => {
+      burstRandom(); fireSound(0);
+      // After last wave settles a little, pop the image + second round
+      setTimeout(revealImage, 800);
+    }, 1800);
+  }
+
+  /* ── Image reveal + second round of corner confetti ── */
+  function revealImage() {
+    // Show the wrapper
+    revealWrap.classList.add('show');
+    // Reset then trigger pop animation
+    revealImg.classList.remove('pop');
+    void revealImg.offsetWidth; // force reflow
+    revealImg.classList.add('pop');
+
+    // Fire 4 more corner bursts with sound, staggered
+    fireSound(0);    burstCorners(); startAnimation();
+    setTimeout(() => { burstRandom();  fireSound(0); }, 500);
+    setTimeout(() => { burstCorners(); fireSound(0); }, 1000);
+    setTimeout(() => { burstRandom();  fireSound(0); }, 1500);
+  }
+
+  /* ── Play / reset ── */
+  function play() {
+    vid.muted = false;
+    vid.currentTime = 0;
+    vid.play();
+    overlay.classList.add('hidden');
+    vidWrap.classList.remove('zoom-out');
+    bg.classList.remove('visible');
+    revealWrap.classList.remove('show');
+    revealImg.classList.remove('pop');
+    pieces = [];
+  }
+
+  vid.addEventListener('ended', () => {
+    vidWrap.classList.add('zoom-out');
+    bg.classList.add('visible');
+    setTimeout(triggerCelebration, 1500);
+  });
+</script>
+
+</body>
+</html>
